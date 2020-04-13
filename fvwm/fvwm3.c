@@ -1464,6 +1464,10 @@ static int CatchFatal(Display *dpy)
 /* FvwmErrorHandler - displays info on internal errors */
 static int FvwmErrorHandler(Display *dpy, XErrorEvent *event)
 {
+	char errdesc[512];
+
+	XGetErrorText(dpy, event->error_code, errdesc, sizeof(errdesc));
+
 	if (event->error_code == BadWindow)
 	{
 		bad_window = event->resourceid;
@@ -1485,9 +1489,10 @@ static int FvwmErrorHandler(Display *dpy, XErrorEvent *event)
 		return 0;
 	}
 	fvwm_msg(ERR, "FvwmErrorHandler", "*** internal error ***");
-	fvwm_msg(ERR, "FvwmErrorHandler", "Request %d, Error %d, EventType: %d",
+	fvwm_msg(ERR, "FvwmErrorHandler", "Request %d, Error %d, Text %s, EventType: %d",
 		 event->request_code,
 		 event->error_code,
+		 errdesc,
 		 last_event_type);
 
 	return 0;
@@ -2491,7 +2496,7 @@ int main(int argc, char **argv)
 	LoadWindowStates(state_filename);
 
 	TAILQ_FOREACH(m, &monitor_q, entry)
-			EWMH_Init(m);
+		EWMH_Init(m);
 
 	DBUG("main", "Setting up rc file defaults...");
 	SetRCDefaults();

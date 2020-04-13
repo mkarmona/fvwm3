@@ -1802,9 +1802,11 @@ void HandleRRScreenChangeNotify(void)
 	mcur = monitor_get_current();
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
-		fprintf(stderr, "Oh yes, it's a mess: %s\n", m->si->name);
-			EWMH_Init(m);
+		if (m->si->is_new) {
+			fprintf(stderr, "%s: changing %s\n", m->si->name);
+			//EWMH_Init(m);
 			m->si->is_new = 0;
+		}
 	}
 
 	BroadcastMonitorList(NULL);

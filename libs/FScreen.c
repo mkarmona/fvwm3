@@ -218,11 +218,16 @@ monitor_get_all_heights(void)
 static void
 monitor_init_one(struct monitor *m)
 {
-	fprintf(stderr, "Adding new desktops for %s\n", m->si->name);
-	m->Desktops = fxcalloc(1, sizeof(DesktopsInfo));
-	m->Desktops->next = NULL;
-	m->Desktops->name = NULL;
-	m->Desktops->desk = 0; /* not desk 0 */
+	if (m->si->is_new) {
+		fprintf(stderr, "Adding new desktops for %s\n", m->si->name);
+		m->Desktops = fxcalloc(1, sizeof(DesktopsInfo));
+		m->Desktops->next = NULL;
+		m->Desktops->name = NULL;
+		m->Desktops->desk = 0; /* not desk 0 */
+	} else {
+		fprintf(stderr, "Refreshing desktops for %s\n", m->si->name);
+		m->si->is_new = 0;
+	}
 
 	m->virtual_scr.EdgeScrollX = DEFAULT_EDGE_SCROLL *
 		m->virtual_scr.MyDisplayWidth  / 100;
@@ -388,8 +393,8 @@ scan_screens(Display *dpy)
 
 		if (oinfo->connection != RR_Connected) {
 			fprintf(stderr, "Tried to create monitor '%s' "
-				"but not connected", oinfo->name);
-			XRRFreeOutputInfo(oinfo);
+				"but not connected\n", oinfo->name);
+			//XRRFreeOutputInfo(oinfo);
 			XRRFreeCrtcInfo(crtc_info);
 			continue;
 		}
