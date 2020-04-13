@@ -2490,12 +2490,8 @@ int main(int argc, char **argv)
 	 * before the first call to AddWindow. */
 	LoadWindowStates(state_filename);
 
-	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->wants_refresh) {
+	TAILQ_FOREACH(m, &monitor_q, entry)
 			EWMH_Init(m);
-			m->wants_refresh = 0;
-		}
-	}
 
 	DBUG("main", "Setting up rc file defaults...");
 	SetRCDefaults();

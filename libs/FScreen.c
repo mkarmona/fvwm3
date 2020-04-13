@@ -46,13 +46,12 @@ static int grav_matrix[3][3] =
 #define DEFAULT_GRAVITY NorthWestGravity
 
 static Display *disp;
-static int no_of_screens;
+static int		 is_randr_present;
 
 static struct monitor	*monitor_new(void);
-static void		 monitor_create_randr_region(struct monitor *m,
-	const char *, struct coord *, int);
 static int		 monitor_check_stale(const char *);
-static void		 monitor_init_one(struct monitor *, int, int);
+static void		 monitor_init_one(struct monitor *);
+static void		 scan_screens(Display *);
 
 static void GetMouseXY(XEvent *eventp, int *x, int *y)
 {
@@ -78,8 +77,32 @@ monitor_new(void)
 	struct monitor	*m;
 
 	m = calloc(1, sizeof *m);
+	//m->si = calloc(1, sizeof(struct screen_info));
 
 	return (m);
+}
+
+struct screen_info *
+screen_info_new(void)
+{
+	struct screen_info	*si;
+
+	si = calloc(1, sizeof *si);
+
+	return (si);
+}
+
+struct screen_info *
+screen_info_by_name(const char *name)
+{
+	struct screen_info	*si;
+
+	TAILQ_FOREACH(si, &screen_info_q, entry) {
+		if (strcmp(si->name, name) == 0)
+			return (si);
+	}
+
+	return (NULL);
 }
 
 struct monitor *
@@ -101,14 +124,14 @@ monitor_by_name(const char *name)
 	struct monitor	*m, *mret = NULL;
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (strcmp(m->name, name) == 0) {
+		if (strcmp(m->si->name, name) == 0) {
 			mret = m;
 			break;
 		}
 	}
 
 	if (mret == NULL && (strcmp(name, GLOBAL_SCREEN_NAME) == 0)) {
-		if (no_of_screens == 1) {
+		if (monitor_get_count() == 1) {
 			/* In this case, the global screen was requested, but
 			 * we've only one monitor in use.  Return this monitor
 			 * instead.
@@ -129,7 +152,7 @@ monitor_by_name(const char *name)
 		fprintf(stderr, "%s: couldn't find monitor: (%s)\n", __func__,
 		    name);
 		fprintf(stderr, "%s: returning current monitor (%s)\n",
-		    __func__, mret->name);
+		    __func__, mret->si->name);
 	}
 
 	return (mret);
@@ -141,7 +164,7 @@ monitor_by_output(int output)
 	struct monitor	*m, *mret = NULL;
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->output == output) {
+		if (m->si->rr_output == output) {
 		       mret = m;
 		       break;
 		}
@@ -159,51 +182,61 @@ monitor_by_output(int output)
 int
 monitor_get_all_widths(void)
 {
-	return (DisplayWidth(disp, DefaultScreen(disp)));
+	if (!is_randr_present)
+		return (DisplayWidth(disp, DefaultScreen(disp)));
+
+	struct monitor	*m;
+	int		 w = 0;
+
+	TAILQ_FOREACH(m, &monitor_q, entry) {
+		if (m->si->is_disabled)
+			continue;
+		w += m->si->ci->width;
+	}
+
+	return (w);
 }
 
 int
 monitor_get_all_heights(void)
 {
-	return (DisplayHeight(disp, DefaultScreen(disp)));
+	if (!is_randr_present)
+		return (DisplayHeight(disp, DefaultScreen(disp)));
+
+	struct monitor	*m;
+	int		 h = 0;
+
+	TAILQ_FOREACH(m, &monitor_q, entry) {
+		if (m->si->is_disabled)
+			continue;
+		h += m->si->ci->height;
+	}
+
+	return (h);
 }
 
 static void
-monitor_init_one(struct monitor *m, int w, int h)
+monitor_init_one(struct monitor *m)
 {
-	struct monitor	*m2;
+	fprintf(stderr, "Adding new desktops for %s\n", m->si->name);
+	m->Desktops = fxcalloc(1, sizeof(DesktopsInfo));
+	m->Desktops->next = NULL;
+	m->Desktops->name = NULL;
+	m->Desktops->desk = 0; /* not desk 0 */
 
-	TAILQ_FOREACH(m2, &monitor_q, entry) {
-		if (m2 != m)
-			break;
-	}
-
-	if (m->Desktops == NULL) {
-		if (m2 != NULL && m2->Desktops != NULL) {
-			memcpy(&m->virtual_scr, &m2->virtual_scr,
-				sizeof(m->virtual_scr));
-			m->Desktops = m2->Desktops;
-			m->Desktops_cpy = m2->Desktops_cpy;
-		} else {
-			m->Desktops = fxcalloc(1, sizeof(DesktopsInfo));
-			m->Desktops->next = NULL;
-			m->Desktops->name = NULL;
-			m->Desktops->desk = 0; /* not desk 0 */
-			m->virtual_scr.EdgeScrollX = DEFAULT_EDGE_SCROLL *
-				m->virtual_scr.MyDisplayWidth  / 100;
-			m->virtual_scr.EdgeScrollY = DEFAULT_EDGE_SCROLL *
-				m->virtual_scr.MyDisplayHeight / 100;
-		}
-		m->wants_refresh = 1;
-	}
-
-	m->virtual_scr.MyDisplayWidth = DisplayWidth(disp, DefaultScreen(disp));
-	m->virtual_scr.MyDisplayHeight = DisplayHeight(disp, DefaultScreen(disp));
+	m->virtual_scr.EdgeScrollX = DEFAULT_EDGE_SCROLL *
+		m->virtual_scr.MyDisplayWidth  / 100;
+	m->virtual_scr.EdgeScrollY = DEFAULT_EDGE_SCROLL *
+		m->virtual_scr.MyDisplayHeight / 100;
+	m->virtual_scr.VxMax = 2 * m->virtual_scr.MyDisplayWidth;
+	m->virtual_scr.VyMax = 2 * m->virtual_scr.MyDisplayHeight;
+	m->virtual_scr.Vx = 0;
+	m->virtual_scr.Vy = 0;
 
 	m->Desktops->ewmh_dyn_working_area.x =
-		m->Desktops->ewmh_working_area.x = m->coord.x;
+		m->Desktops->ewmh_working_area.x = m->si->ci->x;
 	m->Desktops->ewmh_dyn_working_area.y =
-		m->Desktops->ewmh_working_area.y = m->coord.y;
+		m->Desktops->ewmh_working_area.y = m->si->ci->y;
 	m->Desktops->ewmh_dyn_working_area.width =
 		m->Desktops->ewmh_working_area.width =
 		m->virtual_scr.MyDisplayWidth;
@@ -213,7 +246,7 @@ monitor_init_one(struct monitor *m, int w, int h)
 }
 
 void
-monitor_init_contents(void)
+monitor_init_contents(struct monitor *m)
 {
 	/* If we've been asked for the "global" screen, then we set the
 	 * desktop size to all monitors.  We don't need RandR for this; X11
@@ -223,53 +256,56 @@ monitor_init_contents(void)
 	 * Otherwise, we initialise the specific monitors with their own
 	 * values, if "per-monitor" has been specified.
 	 */
-	struct monitor	*m = NULL, *m2 = NULL, *mfirst = NULL, *mdisabled = NULL;
-	int	 	 w = monitor_get_all_widths();
-	int	 	 h = monitor_get_all_heights();
+	struct monitor	*reference_m = NULL, *loop_m = NULL;
 
-	TAILQ_FOREACH(m, &monitor_q, entry)
-		monitor_init_one(m, w, h);
+	/* Always reset the width/height, as this might have changed. */
+	m->virtual_scr.MyDisplayWidth = monitor_get_all_widths();
+	m->virtual_scr.MyDisplayHeight = monitor_get_all_heights();
 
-#if 0
-	/*
-	 * XXX - Check if necessary.
-	 */
-	if (monitor_mode == MONITOR_TRACKING_M)
-		return;
-#endif
+	if (monitor_mode == MONITOR_TRACKING_G) {
+		/* We might be transitioning out of being in per-monitor.
+		 *
+		 * In which case, get the current monitor and use a new
+		 * monitor as a reference.
+		 */
+		fprintf(stderr, "%s: global monitors...\n", __func__);
+		TAILQ_FOREACH(loop_m, &monitor_q, entry) {
+			if (loop_m != m && loop_m->Desktops != NULL) {
+				reference_m = loop_m;
+				break;
+			}
+		}
 
-	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->is_disabled && mdisabled != m)
-			continue;
-		mfirst = m;
-		break;
+		if (reference_m == NULL) {
+			/* Initialise all monitors. */
+			fprintf(stderr, "%s: first time; setting up all monitors\n",
+			    __func__);
+
+			TAILQ_FOREACH(loop_m, &monitor_q, entry)
+				monitor_init_one(loop_m);
+		} else {
+			/* We have a reference monitor to use to add it to a
+			 * global set.
+			 */
+			fprintf(stderr, "%s: found reference monitor '%s' "
+				"copying over desktop information to new "
+				"monitor '%s'\n", __func__,
+				reference_m->si->name, m->si->name);
+			memcpy(&m->virtual_scr, &reference_m->virtual_scr,
+					sizeof(m->virtual_scr));
+
+			/* FIXME: free(); */
+			m->Desktops = reference_m->Desktops;
+		}
 	}
 
-	if (monitor_get_count() == 1)
-		return;
-
-	fprintf(stderr, "%s: first monitor is: %s\n", __func__,
-			mfirst->name);
-
-	if (mfirst->Desktops_cpy != NULL) {
-		mfirst->Desktops = mfirst->Desktops_cpy;
-	} else
-		monitor_init_one(mfirst, w, h);
-
-	if (mfirst->Desktops == NULL && mfirst->Desktops_cpy != NULL)
-		mfirst->Desktops = mfirst->Desktops_cpy;
-
-	if (mfirst->Desktops == NULL)
-		monitor_init_one(mfirst, w, h);
-
-	mfirst->Desktops_cpy = mfirst->Desktops;
-
-	TAILQ_FOREACH(m2, &monitor_q, entry) {
-		/* We've already set the first monitor. */
-		if (mfirst == m2)
-			continue;
-		m2->Desktops = mfirst->Desktops;
-		m2->Desktops_cpy = mfirst->Desktops_cpy;
+	if (monitor_mode == MONITOR_TRACKING_M) {
+		/* Per-monitor. */
+		if (m->si->is_new) {
+			fprintf(stderr, "New monitor: %s, adding stuff\n",
+				m->si->name);
+			monitor_init_one(m);
+		}
 	}
 }
 
@@ -286,118 +322,53 @@ monitor_output_change(Display *dpy, XRROutputChangeNotifyEvent *e)
 	XRROutputInfo		*oinfo;
 	XRRScreenResources	*res;
 	XRRCrtcInfo             *crtc_info = NULL;
-	struct monitor		*m = NULL, *mret = NULL;
-	struct coord		 coord;
-	int 			 count = 0, rr_output_primary = 0;
-	int			 is_primary = 0;
+	struct monitor		*m = NULL;
 
-	count = monitor_get_count();
+	fprintf(stderr, "%s: outputs have changed\n", __func__);
 
 	res = XRRGetScreenResources(dpy, DefaultRootWindow(dpy));
 	if ((oinfo = XRRGetOutputInfo(dpy, res, e->output)) == NULL)
-		fprintf(stderr, "%s: Lost monitor: %d\n", __func__, e->output);
+		fprintf(stderr, "%s: Lost monitor: %d\n", __func__, (int)e->output);
 
 	if ((crtc_info = XRRGetCrtcInfo(dpy, res, oinfo->crtc)) == NULL)
-		fprintf(stderr, "%s: Lost monitor: %d\n", __func__, e->output);
+		fprintf(stderr, "%s: Lost monitor: %d\n", __func__, (int)e->output);
 
-	rr_output_primary = XRRGetOutputPrimary(dpy, DefaultRootWindow(dpy));
+	m = monitor_by_output(e->output);
+	if ((oinfo == NULL || crtc_info == NULL) && m->si->rr_output == e->output)
+		m->si->is_disabled = 1;
+	else
+		m->si->is_disabled = 0;
 
-	TAILQ_FOREACH(m, &monitor_q, entry) {
-		monitor_dump_state(NULL);
-		fprintf(stderr, "%s: changed output: %d, mon output: %d\n",
-			__func__, e->output, m->output);
-		if (m->output == e->output) {
-			mret = m;
-			is_primary = m->is_primary;
-			break;
-		}
-	}
+	scan_screens(dpy);
+	monitor_add_new();
 
-	if (mret != NULL && (oinfo == NULL || crtc_info == NULL)) {
-		/* Previous monitor found, but no longer available -- perhaps
-		 * it has been turned off?
-		 */
-		fprintf(stderr, "%s: found previous monitor (%s) but it is no "
-			"longer active\n", __func__, mret->name);
-		m->is_disabled = 1;
-		monitor_init_contents();
+	TAILQ_FOREACH(m, &monitor_q, entry)
+		monitor_init_contents(m);
 
-		goto out;
-	}
-
-	if (mret == NULL && crtc_info != NULL) {
-		m = monitor_new();
-		m->output = e->output;
-		m->crtc = oinfo->crtc;
-		m->is_disabled = 0;
-		m->wants_refresh = 1;
-		coord.x = crtc_info->x;
-		coord.y = crtc_info->y;
-		coord.w = crtc_info->width;
-		coord.h = crtc_info->height;
-		is_primary = rr_output_primary ==  e->output;
-		monitor_create_randr_region(m, oinfo->name, &coord, is_primary);
-		monitor_init_contents();
-	} else if (mret != NULL && crtc_info != NULL) {
-		coord.x = crtc_info->x;
-		coord.y = crtc_info->y;
-		coord.w = crtc_info->width;
-		coord.h = crtc_info->height;
-		is_primary = rr_output_primary ==  e->output;
-		mret->is_disabled = 0;
-		monitor_create_randr_region(mret, oinfo->name, &coord, is_primary);
-		monitor_init_contents();
-	}
-out:
 	XRRFreeOutputInfo(oinfo);
 	XRRFreeCrtcInfo(crtc_info);
 	XRRFreeScreenResources(res);
+
 }
 
-void FScreenInit(Display *dpy)
+static void
+scan_screens(Display *dpy)
 {
 	XRRScreenResources	*res = NULL;
 	XRROutputInfo		*oinfo = NULL;
 	XRRCrtcInfo		*crtc_info = NULL;
 	RROutput		 rr_output, rr_output_primary;
-	struct monitor		*m;
-	struct coord		 coord;
-	int			 err_base = 0;
-	int			 is_randr_present = 0;
+	struct screen_info	*si;
 	int			 iscres, is_primary = 0;
 
-	disp = dpy;
-	randr_event = 0;
-	no_of_screens = 0;
-
-	if (TAILQ_EMPTY(&monitor_q))
-		TAILQ_INIT(&monitor_q);
-
-	is_randr_present = XRRQueryExtension(dpy, &randr_event, &err_base);
-
-	if (FScreenIsEnabled() && !is_randr_present) {
-		/* Something went wrong. */
-		fprintf(stderr, "Couldn't initialise XRandR: %s\n",
-			strerror(errno));
-		fprintf(stderr, "Falling back to single screen...\n");
-
-		goto single_screen;
-	}
-
-	/* XRandR is present, so query the screens we have. */
 	res = XRRGetScreenResources(dpy, DefaultRootWindow(dpy));
-
-	if (res == NULL || (res != NULL && res->noutput == 0)) {
-		XRRFreeScreenResources(res);
-		goto single_screen;
-	}
 
 	for (iscres = 0; iscres < res->ncrtc; iscres++) {
 		crtc_info = XRRGetCrtcInfo(dpy, res, res->crtcs[iscres]);
 
 		if (crtc_info->noutput == 0) {
 			fprintf(stderr, "Screen found; no crtc present\n");
-			XRRFreeCrtcInfo(crtc_info);
+			//XRRFreeCrtcInfo(crtc_info);
 			continue;
 		}
 
@@ -423,69 +394,125 @@ void FScreenInit(Display *dpy)
 			continue;
 		}
 
-		m = monitor_new();
-		m->output = rr_output;
-		m->crtc = oinfo->crtc;
-		m->wants_refresh = 1;
-		coord.x = crtc_info->x;
-		coord.y = crtc_info->y;
-		coord.w = crtc_info->width;
-		coord.h = crtc_info->height;
+		/* TA:  Check if screen present, if so, update, otherwise
+		 * create new.
+		 */
+		if (monitor_check_stale(oinfo->name) == 0) {
+			/* New monitor!   Just create the information and it
+			 * will get filled in.
+			 */
+			fprintf(stderr, "New output detected: %s\n", oinfo->name);
+			si = screen_info_new();
+			si->name = strdup(oinfo->name);
+			si->ci = crtc_info;
+			si->rr_output = rr_output;
+			si->is_primary = is_primary;
+			si->is_new = 1;
+			si->is_disabled = 0;
 
-		monitor_create_randr_region(m, oinfo->name, &coord, is_primary);
+			TAILQ_INSERT_TAIL(&screen_info_q, si, entry);
+		} else {
+			/* refreshing existing entry. */
+			if ((si = screen_info_by_name(oinfo->name)) == NULL) {
+				/* Bug. */
+				fprintf(stderr,
+				    "No screen found when updating screen_info");
+				abort();
+			}
 
-		XRRFreeCrtcInfo(crtc_info);
-		XRRFreeOutputInfo(oinfo);
+			/* Copy over the CRTC information. */
+			fprintf(stderr, "Updating existing entry: %s (%d)\n",
+				oinfo->name, (int)rr_output);
+			XRRFreeCrtcInfo(si->ci);
+			si->ci = crtc_info;
+			si->rr_output = rr_output;
+			si->is_primary = is_primary;
+			si->is_new = 0;
+		}
+	}
+	XRRFreeScreenResources(res);
+	XRRFreeOutputInfo(oinfo);
+	XRRFreeCrtcInfo(crtc_info);
+}
 
-		no_of_screens++;
+void
+monitor_add_new(void)
+{
+	struct screen_info	*si;
+	struct monitor		*m;
+
+	TAILQ_FOREACH(si, &screen_info_q, entry) {
+		if (si->is_new) {
+			fprintf(stderr, "Adding new monitor %s (%d)\n",
+				si->name, (int)si->rr_output);
+			m = monitor_new();
+			m->si = si;
+			TAILQ_INSERT_TAIL(&monitor_q, m, entry);
+		}
+	}
+}
+
+void FScreenInit(Display *dpy)
+{
+	XRRScreenResources	*res = NULL;
+	struct monitor		*m;
+	int			 err_base = 0;
+
+	disp = dpy;
+	randr_event = 0;
+
+	if (TAILQ_EMPTY(&monitor_q))
+		TAILQ_INIT(&monitor_q);
+
+	if (TAILQ_EMPTY(&screen_info_q))
+		TAILQ_INIT(&screen_info_q);
+
+	is_randr_present = XRRQueryExtension(dpy, &randr_event, &err_base);
+
+	if (FScreenIsEnabled() && !is_randr_present) {
+		/* Something went wrong. */
+		fprintf(stderr, "Couldn't initialise XRandR: %s\n",
+			strerror(errno));
+		fprintf(stderr, "Falling back to single screen...\n");
+
+		goto single_screen;
+	}
+
+	/* XRandR is present, so query the screens we have. */
+	res = XRRGetScreenResources(dpy, DefaultRootWindow(dpy));
+
+	if (res == NULL || (res != NULL && res->noutput == 0)) {
+		XRRFreeScreenResources(res);
+		goto single_screen;
 	}
 	XRRFreeScreenResources(res);
 
-	monitor_init_contents();
+	scan_screens(disp);
+
+	/* Go through the new/updated list of screens, creating new monitors
+	 * where required.
+	 */
+	monitor_add_new();
+
+	TAILQ_FOREACH(m, &monitor_q, entry)
+		monitor_init_contents(m);
 
 	return;
 
 single_screen:
 	m = monitor_new();
-	m->output = -1;
-	m->crtc = -1;
-	coord.x = 0;
-	coord.y = 0;
-	coord.w = DisplayWidth(disp, DefaultScreen(disp));
-	coord.h = DisplayHeight(disp, DefaultScreen(disp));
+	m->si->name = fxstrdup(GLOBAL_SCREEN_NAME);
+	m->si->rr_output = -1;
+	m->si->is_primary = 0;
+	m->si->is_disabled = 0;
+	m->si->ci = &(XRRCrtcInfo){
+		.x = 0,
+		.y = 0,
+		.width  = DisplayWidth(disp, DefaultScreen(disp)),
+		.height = DisplayHeight(disp, DefaultScreen(disp))};
 
-	monitor_create_randr_region(m, GLOBAL_SCREEN_NAME, &coord, is_primary);
-	monitor_init_contents();
+	monitor_init_contents(m);
 
-	if (++no_of_screens > 0)
-		no_of_screens--;
-}
-
-static void
-monitor_create_randr_region(struct monitor *m, const char *name,
-	struct coord *coord, int is_primary)
-{
-	m->win_count = 0; /* filled in via UPDATE_FVWM_SCREEN */
-
-	/* Always copy over the new coord information.  This may have changed
-	 * at any point, and we don't want to lose it.
-	 */
-	memcpy(&m->coord, coord, sizeof(*coord));
-
-	if (monitor_check_stale(name)) {
-		/* We've seen this monitor before, and it's already in the
-		 * list.  Skip anything further; we will fill in the
-		 * appropriate values via monitor_init_contents()
-		 */
-		fprintf(stderr, "%s: monitor '%s' already in list, so skipping\n",
-			__func__, name);
-		return;
-	}
-	fprintf(stderr, "Monitor: %s %s (x: %d, y: %d, w: %d, h: %d)\n",
-		name, is_primary ? "(PRIMARY)" : "",
-		coord->x, coord->y, coord->w, coord->h);
-
-	m->name = fxstrdup(name);
 	TAILQ_INSERT_TAIL(&monitor_q, m, entry);
 }
 
@@ -497,7 +524,7 @@ monitor_dump_state(struct monitor *m)
 	mcur = monitor_get_current();
 
 	fprintf(stderr, "Monitor Debug\n");
-	fprintf(stderr, "\tnumber of outputs: %d\n", monitor_get_count()); 
+	fprintf(stderr, "\tnumber of outputs: %d\n", monitor_get_count());
 	TAILQ_FOREACH(m2, &monitor_q, entry) {
 		if (m2 == NULL) {
 			fprintf(stderr, "monitor in list is NULL.  Bug!\n");
@@ -510,7 +537,6 @@ monitor_dump_state(struct monitor *m)
 			"\tDisabled:\t%s\n"
 			"\tIs Primary:\t%s\n"
 			"\tIs Current:\t%s\n"
-			"\tWants Refresh:\t\%s\n"
 			"\tOutput:\t%d\n"
 			"\tCoords:\t{x: %d, y: %d, w: %d, h: %d}\n"
 			"\tVirtScr: {\n"
@@ -521,13 +547,12 @@ monitor_dump_state(struct monitor *m)
 			"\t\tMyDisplayWidth: %d, MyDisplayHeight: %d\n\t}\n"
 			"\tDesktops:\t%s\n"
 			"\tFlags:%s\n\n",
-			m2->name,
-			m2->is_disabled ? "true" : "false",
-			m2->is_primary ? "yes" : "no",
+			m2->si->name,
+			m2->si->is_disabled ? "true" : "false",
+			m2->si->is_primary ? "yes" : "no",
 			(mcur && m2 == mcur) ? "yes" : "no",
-			m2->wants_refresh ? "true" : "false",
-			m2->output,
-			m2->coord.x, m2->coord.y, m2->coord.w, m2->coord.h,
+			(int)m2->si->rr_output,
+			m2->si->ci->x, m2->si->ci->y, m2->si->ci->width, m2->si->ci->height,
 			m2->virtual_scr.VxMax, m2->virtual_scr.VyMax,
 			m2->virtual_scr.Vx, m2->virtual_scr.Vy,
 			m2->virtual_scr.EdgeScrollX, m2->virtual_scr.EdgeScrollY,
@@ -552,11 +577,11 @@ monitor_check_stale(const char *name)
 	TAILQ_FOREACH(mcheck, &monitor_q, entry) {
 		if (mcheck == NULL)
 			break;
-		if (name == NULL || mcheck->name == NULL) {
+		if (name == NULL || mcheck->si->name == NULL) {
 			/* Shouldn't happen. */
 			break;
 		}
-		if (strcmp(mcheck->name, name) == 0)
+		if (strcmp(mcheck->si->name, name) == 0)
 			return (1);
 	}
 
@@ -569,8 +594,11 @@ monitor_get_count(void)
 	struct monitor	*m = NULL;
 	int		 c = 0;
 
-	TAILQ_FOREACH(m, &monitor_q, entry)
+	TAILQ_FOREACH(m, &monitor_q, entry) {
+		if (m->si->is_disabled)
+			continue;
 		c++;
+	}
 	return (c);
 }
 
@@ -596,10 +624,10 @@ FindScreenOfXY(int x, int y)
 		 * which is only concerned with the *specific* screen.
 		 */
 		if (monitor_get_count() > 0 &&
-		    strcmp(m->name, GLOBAL_SCREEN_NAME) == 0)
+		    strcmp(m->si->name, GLOBAL_SCREEN_NAME) == 0)
 			continue;
-		if (xa >= m->coord.x && xa < m->coord.x + m->coord.w &&
-		    ya >= m->coord.y && ya < m->coord.y + m->coord.h)
+		if (xa >= m->si->ci->x && xa < m->si->ci->x + m->si->ci->width &&
+		    ya >= m->si->ci->y && ya < m->si->ci->y + m->si->ci->height)
 			return (m);
 	}
 
@@ -619,7 +647,7 @@ FindScreen(fscreen_scr_arg *arg, fscreen_scr_t screen)
 	struct monitor	*m = NULL;
 	fscreen_scr_arg  tmp;
 
-	if (no_of_screens == 0)
+	if (monitor_get_count() == 0)
 		return (monitor_by_name(GLOBAL_SCREEN_NAME));
 
 	switch (screen)
@@ -676,7 +704,7 @@ FScreenOfPointerXY(int x, int y)
 
 	m = FindScreenOfXY(x, y);
 
-	return (m != NULL) ? m->name : "unknown";
+	return (m != NULL) ? m->si->name : "unknown";
 }
 
 /* Returns the specified screens geometry rectangle.  screen can be a screen
@@ -709,16 +737,16 @@ Bool FScreenGetScrRect(fscreen_scr_arg *arg, fscreen_scr_t screen,
 	}
 
 	if (x)
-		*x = m->coord.x;
+		*x = m->si->ci->x;
 	if (y)
-		*y = m->coord.y;
+		*y = m->si->ci->y;
 	if (w)
-		*w = m->coord.w;
+		*w = m->si->ci->width;
 	if (h)
-		*h = m->coord.h;
+		*h = m->si->ci->height;
 
-	return !((no_of_screens > 1) &&
-		(strcmp(m->name, GLOBAL_SCREEN_NAME) == 0));
+	return !((monitor_get_count() > 1) &&
+		(strcmp(m->si->name, GLOBAL_SCREEN_NAME) == 0));
 }
 
 /* Translates the coodinates *x *y from the screen specified by arg_src and
@@ -920,16 +948,16 @@ int FScreenParseGeometry(
 	if (rc & XValue)
 	{
 		if (rc & XNegative)
-			*x_return -= (m->coord.w - m->coord.x);
+			*x_return -= (m->si->ci->width - m->si->ci->x);
 		else
-			*x_return += m->coord.x;
+			*x_return += m->si->ci->x;
 	}
 	if (rc & YValue)
 	{
 		if (rc & YNegative)
-			*y_return -= (m->coord.h - m->coord.y);
+			*y_return -= (m->si->ci->height - m->si->ci->y);
 		else
-			*y_return += m->coord.y;
+			*y_return += m->si->ci->y;
 	}
 	return rc;
 }

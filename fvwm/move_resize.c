@@ -1813,10 +1813,10 @@ static void __move_window(F_CMD_ARGS, Bool do_animate, int mode)
 		else
 			m = monitor_by_name(action);
 
-		s.x = m->coord.x;
-		s.y = m->coord.y;
-		s.width = m->coord.w;
-		s.height = m->coord.h;
+		s.x = m->si->ci->x;
+		s.y = m->si->ci->y;
+		s.width = m->si->ci->width;
+		s.height = m->si->ci->height;
 
 		do_animate = False;
 		page_x = m->virtual_scr.Vx;
@@ -1982,8 +1982,8 @@ static void DoSnapAttract(
 		scr_w = m->virtual_scr.MyDisplayWidth;
 		scr_h = m->virtual_scr.MyDisplayHeight;
 	} else {
-		scr_w = m->coord.w;
-		scr_h = m->coord.h;
+		scr_w = m->si->ci->width;
+		scr_h = m->si->ci->height;
 	}
 
 	/*

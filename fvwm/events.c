@@ -1793,7 +1793,7 @@ static void __refocus_stolen_focus_win(const evh_args_t *ea)
 void HandleRRScreenChangeNotify(void)
 {
 	FvwmWindow	*t;
-	struct monitor	*mcur, *m;
+	struct monitor	*m, *mcur;
 
 	if (Scr.bo.do_debug_randr) {
 		fprintf(stderr, "%s: monitor debug...\n", __func__);
@@ -1802,16 +1802,11 @@ void HandleRRScreenChangeNotify(void)
 	mcur = monitor_get_current();
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->wants_refresh) {
-			fprintf(stderr, "%s: refreshing monitor %s\n", __func__,
-				m->name);
-			if (m->Desktops_cpy != NULL)
-				m->Desktops = m->Desktops_cpy;
-			else
-				EWMH_Init(m);
-			m->wants_refresh = 0;
-		}
+		fprintf(stderr, "Oh yes, it's a mess: %s\n", m->si->name);
+			EWMH_Init(m);
+			m->si->is_new = 0;
 	}
+
 	BroadcastMonitorList(NULL);
 
 	for (t = Scr.FvwmRoot.next; t; t = t->next) {
@@ -1819,6 +1814,7 @@ void HandleRRScreenChangeNotify(void)
 		 * list, then move this window to the monitor which has the
 		 * pointer.
 		 */
+#if 0 /*** Will move to FvwmEvent. ***/
 		struct monitor	*m = t->m;
 		char		*move_cmd = NULL;
 
@@ -1834,12 +1830,12 @@ void HandleRRScreenChangeNotify(void)
 			 * previous windows.
 			 */
 			if (t->m_prev != NULL &&
-			    (strcmp(t->m_prev->name, m->name) == 0)) {
+			    (strcmp(t->m_prev->si->name, m->si->name) == 0)) {
 			    t->m = t->m_prev;
 			}
 
 			if (t->m != NULL) {
-				asprintf(&move_cmd, "MoveToScreen %s", t->m->name);
+				asprintf(&move_cmd, "MoveToScreen %s", t->m->si->name);
 				execute_function_override_window(NULL, NULL, move_cmd, 0, t);
 				free(move_cmd);
 				break;
@@ -1847,13 +1843,14 @@ void HandleRRScreenChangeNotify(void)
 		}
 
 		if (m != mcur) {
-			asprintf(&move_cmd, "MoveToScreen %s", mcur->name);
+			asprintf(&move_cmd, "MoveToScreen %s", mcur->si->name);
 			execute_function_override_window(NULL, NULL, move_cmd, 0, t);
 			fprintf(stderr, "Moved window (0x%x) to monitor %s\n",
-				(int)FW_W(t), t->m->name);
+				(int)FW_W(t), t->m->si->name);
 			free(move_cmd);
 			continue;
 		}
+#endif
 		UPDATE_FVWM_SCREEN(t);
 	}
 }
@@ -2919,7 +2916,7 @@ void HandleMapNotify(const evh_args_t *ea)
 	Bool is_on_this_page = False;
 	const XEvent *te = ea->exc->x.etrigger;
 	FvwmWindow * const fw = ea->exc->w.fw;
-	struct monitor *m = NULL;
+	struct monitor *m = monitor_get_current();
 
 	DBUG("HandleMapNotify", "Routine Entered");
 
@@ -2957,7 +2954,7 @@ void HandleMapNotify(const evh_args_t *ea)
 
 	/* Make sure at least part of window is on this page before giving it
 	 * focus... */
-	is_on_this_page = IsRectangleOnThisPage(fw->m, &(fw->g.frame), fw->Desk);
+	is_on_this_page = IsRectangleOnThisPage(m, &(fw->g.frame), fw->Desk);
 
 	/*
 	 * Need to do the grab to avoid race condition of having server send
@@ -2976,7 +2973,6 @@ void HandleMapNotify(const evh_args_t *ea)
 	}
 	XMapSubwindows(dpy, FW_W_FRAME(fw));
 
-	m = fw->m;
 	if (fw->Desk == m->virtual_scr.CurrentDesk)
 	{
 		XMapWindow(dpy, FW_W_FRAME(fw));
