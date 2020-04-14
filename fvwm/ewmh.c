@@ -1856,6 +1856,7 @@ void EWMH_Init(struct monitor *m)
 	unsigned char utf_name[4];
 	char *names[1];
 	XClassHint classhints;
+	struct monitor *moper;
 
 	/* initialisation of all the atoms */
 	XA_UTF8_STRING = XInternAtom(dpy,"UTF8_STRING",False);
@@ -1901,14 +1902,18 @@ void EWMH_Init(struct monitor *m)
 
 	clean_up();
 
-	EWMH_SetDesktopNames(m);
-	EWMH_SetCurrentDesktop(m);
-	EWMH_SetNumberOfDesktops(m);
-	EWMH_SetDesktopViewPort(m);
-	EWMH_SetDesktopGeometry(m);
-	EWMH_SetClientList(m);
-	EWMH_SetClientListStacking(m);
-	ewmh_ComputeAndSetWorkArea(m);
+	moper = TAILQ_FIRST(&monitor_q);
+
+	if (m->si->is_new) {
+		ewmh_ComputeAndSetWorkArea(moper);
+		EWMH_SetDesktopNames(moper);
+		EWMH_SetCurrentDesktop(moper);
+		EWMH_SetDesktopGeometry(moper);
+		EWMH_SetDesktopViewPort(moper);
+		EWMH_SetNumberOfDesktops(moper);
+		EWMH_SetClientList(moper);
+		EWMH_SetClientListStacking(moper);
+	}
 
 	return;
 }

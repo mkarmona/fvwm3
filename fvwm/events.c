@@ -1803,8 +1803,12 @@ void HandleRRScreenChangeNotify(void)
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
 		if (m->si->is_new) {
-			fprintf(stderr, "%s: changing %s\n", m->si->name);
-			//EWMH_Init(m);
+			fprintf(stderr, "%s: changing %s\n", __func__,
+				m->si->name);
+			EWMH_SetDesktopNames(m);
+			EWMH_SetCurrentDesktop(m);
+			EWMH_SetDesktopGeometry(m);
+			EWMH_SetDesktopViewPort(m);
 			m->si->is_new = 0;
 		}
 	}
