@@ -53,6 +53,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdbool.h>
 #include <X11/Xatom.h>
 
 #include "libs/ftime.h"
@@ -1790,70 +1791,33 @@ static void __refocus_stolen_focus_win(const evh_args_t *ea)
 /* ---------------------------- event handlers ----------------------------- */
 
 #ifdef HAVE_XRANDR
-void HandleRRScreenChangeNotify(void)
+void monitor_update_ewmh(void)
 {
 	FvwmWindow	*t;
-	struct monitor	*mcur, *m;
+	struct monitor	*m, *mref;
 
 	if (Scr.bo.do_debug_randr) {
 		fprintf(stderr, "%s: monitor debug...\n", __func__);
 		monitor_dump_state(NULL);
 	}
-	mcur = monitor_get_current();
+
+	mref = TAILQ_FIRST(&monitor_q);
 
 	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->wants_refresh) {
-			fprintf(stderr, "%s: refreshing monitor %s\n", __func__,
-				m->name);
-			if (m->Desktops_cpy != NULL)
-				m->Desktops = m->Desktops_cpy;
-			else
-				EWMH_Init(m);
-			m->wants_refresh = 0;
+		if (m->flags & MONITOR_NEW) {
+			m->virtual_scr.Vx = mref->virtual_scr.Vx;
+			m->virtual_scr.Vy = mref->virtual_scr.Vy;
+			m->virtual_scr.VxMax = mref->virtual_scr.VxMax;
+			m->virtual_scr.VyMax = mref->virtual_scr.VyMax;
+
+			m->flags &= ~MONITOR_NEW;
 		}
+		EWMH_Init(m);
 	}
+
 	BroadcastMonitorList(NULL);
 
 	for (t = Scr.FvwmRoot.next; t; t = t->next) {
-		/* If the monitor the window is on is no longer present in our
-		 * list, then move this window to the monitor which has the
-		 * pointer.
-		 */
-		struct monitor	*m = t->m;
-		char		*move_cmd = NULL;
-
-		update_relative_geometry(t);
-		update_absolute_geometry(t);
-		UPDATE_FVWM_SCREEN(t);
-
-		if (t->m_prev != NULL) {
-			/* If the window count on this monitor is 0, then it
-			 * must be a new monitor.
-			 *
-			 * Check to see if this new monitor used to contain
-			 * previous windows.
-			 */
-			if (t->m_prev != NULL &&
-			    (strcmp(t->m_prev->name, m->name) == 0)) {
-			    t->m = t->m_prev;
-			}
-
-			if (t->m != NULL) {
-				asprintf(&move_cmd, "MoveToScreen %s", t->m->name);
-				execute_function_override_window(NULL, NULL, move_cmd, 0, t);
-				free(move_cmd);
-				break;
-			}
-		}
-
-		if (m != mcur) {
-			asprintf(&move_cmd, "MoveToScreen %s", mcur->name);
-			execute_function_override_window(NULL, NULL, move_cmd, 0, t);
-			fprintf(stderr, "Moved window (0x%x) to monitor %s\n",
-				(int)FW_W(t), t->m->name);
-			free(move_cmd);
-			continue;
-		}
 		UPDATE_FVWM_SCREEN(t);
 	}
 }
@@ -2919,7 +2883,7 @@ void HandleMapNotify(const evh_args_t *ea)
 	Bool is_on_this_page = False;
 	const XEvent *te = ea->exc->x.etrigger;
 	FvwmWindow * const fw = ea->exc->w.fw;
-	struct monitor *m = NULL;
+	struct monitor *m = monitor_get_current();
 
 	DBUG("HandleMapNotify", "Routine Entered");
 
@@ -2957,7 +2921,7 @@ void HandleMapNotify(const evh_args_t *ea)
 
 	/* Make sure at least part of window is on this page before giving it
 	 * focus... */
-	is_on_this_page = IsRectangleOnThisPage(fw->m, &(fw->g.frame), fw->Desk);
+	is_on_this_page = IsRectangleOnThisPage(m, &(fw->g.frame), fw->Desk);
 
 	/*
 	 * Need to do the grab to avoid race condition of having server send
@@ -2976,7 +2940,6 @@ void HandleMapNotify(const evh_args_t *ea)
 	}
 	XMapSubwindows(dpy, FW_W_FRAME(fw));
 
-	m = fw->m;
 	if (fw->Desk == m->virtual_scr.CurrentDesk)
 	{
 		XMapWindow(dpy, FW_W_FRAME(fw));
@@ -4196,29 +4159,17 @@ void dispatch_event(XEvent *e)
 #if HAVE_XRANDR
 	XRRNotifyEvent *ne;
 	XRROutputChangeNotifyEvent *oe;
+	XRRScreenChangeNotifyEvent *sce;
 
-	if (e->type - randr_event == RRNotify) {
-		XRRUpdateConfiguration(e);
-		ne = (XRRNotifyEvent *)e;
-		switch (ne->subtype) {
-		case RRNotify_OutputChange:
-			oe = (XRROutputChangeNotifyEvent *)e;
-			monitor_output_change(dpy, oe);
-			HandleRRScreenChangeNotify();
+	XRRUpdateConfiguration(e);
+
+	switch (e->type - randr_event) {
+		case RRScreenChangeNotify: {
+			sce = (XRRScreenChangeNotifyEvent *)e;
+			monitor_output_change(sce->display, sce);
+			monitor_update_ewmh();
 			break;
-		case RRNotify_CrtcChange:
-			fprintf(stderr, "%s: got RRNotifyCRTCChange event\n",
-				__func__);
-			break;
-		case RRNotify_OutputProperty:
-			fprintf(stderr, "%s: got RRNotifyOutputProperty event\n",
-				__func__);
-			break;
-		default:
-			fprintf(stderr, "%s: unknown subtype\n", __func__);
 		}
-
-		return;
 	}
 #endif
 

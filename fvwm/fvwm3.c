@@ -1155,25 +1155,7 @@ static void InitVariables(void)
 	 * initially */
 	Scr.cascade_window = &Scr.FvwmRoot;
 	Scr.buttons2grab = 0;
-	/* initialisation of the head of the desktops info */
-	/* TA: MOVE THIS...
-	 */
-#if 0
-	Scr.Desktops = fxmalloc(sizeof(DesktopsInfo));
-	Scr.Desktops->name = NULL;
-	Scr.Desktops->desk = 0; /* not desk 0 */
-	Scr.Desktops->ewmh_dyn_working_area.x =
-		Scr.Desktops->ewmh_working_area.x = 0;
-	Scr.Desktops->ewmh_dyn_working_area.y =
-		Scr.Desktops->ewmh_working_area.y = 0;
-	Scr.Desktops->ewmh_dyn_working_area.width =
-		Scr.Desktops->ewmh_working_area.width = Scr.MyDisplayWidth;
-	Scr.Desktops->ewmh_dyn_working_area.height =
-		Scr.Desktops->ewmh_working_area.height = Scr.MyDisplayHeight;
-	Scr.Desktops->next = NULL;
-#endif
 	/* ewmh desktop */
-	Scr.EwmhDesktop = NULL;
 	InitFvwmDecor(&Scr.DefaultDecor);
 	Scr.DefaultDecor.tag = "Default";
 	/* Initialize RaiseHackNeeded by identifying X servers
@@ -1464,6 +1446,8 @@ static int CatchFatal(Display *dpy)
 /* FvwmErrorHandler - displays info on internal errors */
 static int FvwmErrorHandler(Display *dpy, XErrorEvent *event)
 {
+	char errtext[512];
+
 	if (event->error_code == BadWindow)
 	{
 		bad_window = event->resourceid;
@@ -1484,10 +1468,15 @@ static int FvwmErrorHandler(Display *dpy, XErrorEvent *event)
 	{
 		return 0;
 	}
+
+	XGetErrorText(dpy, event->error_code, errtext, 512);
+
 	fvwm_msg(ERR, "FvwmErrorHandler", "*** internal error ***");
-	fvwm_msg(ERR, "FvwmErrorHandler", "Request %d, Error %d, EventType: %d",
+	fvwm_msg(ERR, "FvwmErrorHandler", "Request %d, Error %d, Text %s, "
+		"EventType: %d",
 		 event->request_code,
 		 event->error_code,
+		 errtext,
 		 last_event_type);
 
 	return 0;
@@ -2486,16 +2475,12 @@ int main(int argc, char **argv)
 	Scr.gray_bitmap =
 		XCreateBitmapFromData(dpy,Scr.Root,g_bits, g_width,g_height);
 
+	TAILQ_FOREACH(m, &monitor_q, entry)
+		EWMH_Init(m);
+
 	/* This should be done early enough to have the window states loaded
 	 * before the first call to AddWindow. */
 	LoadWindowStates(state_filename);
-
-	TAILQ_FOREACH(m, &monitor_q, entry) {
-		if (m->wants_refresh) {
-			EWMH_Init(m);
-			m->wants_refresh = 0;
-		}
-	}
 
 	DBUG("main", "Setting up rc file defaults...");
 	SetRCDefaults();
